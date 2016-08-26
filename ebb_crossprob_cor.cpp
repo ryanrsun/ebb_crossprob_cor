@@ -54,10 +54,11 @@ bool avg_cond_covar(const int &d,
                     const std::vector<std::vector<double>> &r_table,
                     const std::vector<std::vector<double>> &herm_table,
                     std::vector<double> &covar_vec);
-double eval_EBB_PMF(const int &n,
-                    const int &y,
-                    const double &lambda,
-                    const double &gamma);
+bool eval_EBB_PMF_allN(const int &max_n,
+                       int &y,
+                       const double &lambda,
+                       const double &gamma,
+                       std::vector<double> &PMF_vec);
 double calc_qka(const int &d,
                 const int &k,
                 const int &a,
@@ -262,38 +263,61 @@ bool avg_cond_covar(const int &d,
 }
 
 
-// Evaluate the EBB PMF at a given value y.
-double eval_EBB_PMF(const int &n,
-                    const int &y,
-                    const double &lambda,
-                    const double &gamma)
+// Evaluate the EBB PMF for a range of n, so we don't have to repeat
+// multiplications for Pr[S(t_k)=a|S(t_k-1)=m] for m=a:(d-k+1).  Here 'y' is a.
+bool eval_EBB_PMF_allN(const int &max_n,
+                       const int &y,                  // min_n = y
+                       const double &lambda,
+                       const double &gamma,
+                       std::vector<double> &PMF_vec)
 {
+    // If (d-k+1) <=1 then we don't need to do these calculations.
+    if (max_n < 2) { return 0;}
+    
     double prob_mass = 1.0;
-    if (y == 0)
+    double min_n;
+    if (y < 2)        // Here y=0/1 and max_n >= 2; can fill the 0/1 slots of PMF with nonsense.
     {
-        for (int iii=0; iii<n; ++iii)
+        PMF_vec[0] = 0.0;
+        PMF_vec[1] = 0.0;
+        
+        if (y == 0)
         {
-            prob_mass = prob_mass * (1-lambda+gamma*iii) / (1+gamma*iii);
+            prob_mass = (1-lambda) * (1-lambda+gamma) / (1+gamma);      // For a=0 and m=2:(d-k+1)
+        } else if (y == 1)
+        {
+            prob_mass = lambda * (1-lambda) / (1+gamma);                // For a=1 and m=2:(d-k+1)
         }
-    } else if (y == n)
+        
+        // Start the next phase at y=2.
+        min_n = 2;
+        PMF_vec[2] = prob_mass;
+    }
+    else
     {
+        // Here we just do one calculation and finish.
         for (int iii=0; iii<y; ++iii)
         {
             prob_mass = prob_mass * (lambda+gamma*iii) / (1+gamma*iii);
         }
-    } else
-    {
-        for (int iii=0; iii<y; ++iii)
-        {
-            prob_mass = prob_mass * (lambda+gamma*iii) / (1+gamma*iii);
-        }
-        for (int iii=y; iii<n; ++iii)
-        {
-            prob_mass = prob_mass * (1-lambda+gamma*(iii-y)) / (1+gamma*iii);
-        }
+        PMF_vec[y] = prob_mass;
+        min_n = y;
     }
     
-    return prob_mass;
+    if (min_n == max_n)             // Done if a=(d-k+1).
+    {
+        return 0;
+    }
+    
+    // Not done, a<(d-k+1).
+    int n_diff = max_n - min_n;
+    for (int jjj=1; jjj<=n_diff; ++jjj)             // One multiplication and store for each j.
+    {
+        prob_mass = prob_mass * (1-lambda+gamma*(min_n-y-1+jjj)) / (1+gamma*(min_n-1+jjj));
+        PMF_vec[min_n+jjj] = prob_mass;
+    }
+    
+    return 0;
 }
 
 
@@ -310,6 +334,17 @@ double calc_qka(const int &d,
     double q_ka = 0.0;
     double min_gamma;
     double m_choose_a;
+    std::vector<double> PMF_vec(d);
+    
+    // To hold the the EBB probability (w/o factorial part) for m=a:(d-k+1)
+    if (!ind_flag)
+    {
+        bool all_EBB_status = eval_EBB_PMF_allN((d-k+1),
+                                                a,
+                                                lambda,
+                                                gamma,
+                                                PMF_vec);
+    }
     
     // Sum over all possible values of S(t)=m
     for (int mmm=a; mmm<=(d-k+1); ++mmm)
@@ -324,10 +359,7 @@ double calc_qka(const int &d,
         }
         else          // EBB PMF
         {
-            q_ka += prev_row[mmm] * m_choose_a * eval_EBB_PMF(mmm,
-                                                              a,
-                                                              lambda,
-                                                              gamma);
+            q_ka += prev_row[mmm] * m_choose_a * PMF_vec[mmm];
         }
     }
     
