@@ -334,7 +334,7 @@ double calc_qka(const int &d,
     double q_ka = 0.0;
     double min_gamma;
     double m_choose_a;
-    std::vector<double> PMF_vec(d);
+    std::vector<double> PMF_vec(d+1);
     
     // To hold the the EBB probability (w/o factorial part) for m=a:(d-k+1)
     if (!ind_flag)
@@ -428,7 +428,7 @@ double calc_allq(const int &d,
     double temp_qka;
     for (int kkk=1; kkk<=d; ++kkk)
     {
-        prev_row.swap(current_row);
+        prev_row = current_row;
         
         // If new bound same as previous bound (make sure tolerance is same as match_moments).
         if (fabs(t_vec[kkk-1] - prev_bound) < pow(10.0, -8.0))
