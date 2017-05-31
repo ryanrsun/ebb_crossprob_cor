@@ -165,6 +165,10 @@ bool create_hermtable(const int &d,
                       const std::vector <double> &t_vec,
                       std::vector<std::vector<double>> &herm_table)
 {
+    /*
+     // Could check here if same t, then don't need to do the calculations
+     */
+    
     // Hold each of the five Hermite polynomial terms.
     std::vector <double> herm_one(d);
     std::vector <double> herm_two(d);
@@ -203,6 +207,17 @@ bool avg_cond_covar(const int &d,
                     const std::vector< std::vector<double> > &herm_table,
                     std::vector< double > &covar_vec)
 {
+    
+    /*
+     // Could actually do this for all k=1:d and a=1:k.
+     // Right now just do the same for all k,a
+     // Right now indexed by t_1,....,t_d
+     // But it wouldn't be so much harder, just keep the terms we have now
+     // and do some additional multiplications/divisions.
+     // O(d^2) instead of O(d) but the operations are very simple multiplications)
+     */
+    
+    
     // Numerator and denominator vectors for the tricky infinite sum in the variance.
     double num_cor = d*(d-1)/2;
     double cond_mean_sq = 0.0;
@@ -265,60 +280,69 @@ bool avg_cond_covar(const int &d,
 
 // Evaluate the EBB PMF for a range of n, so we don't have to repeat
 // multiplications for Pr[S(t_k)=a|S(t_k-1)=m] for m=a:(d-k+1).  Here 'y' is a.
-bool eval_EBB_PMF_allN(const int &max_n,
-                       const int &y,                  // min_n = y
-                       const double &lambda,
-                       const double &gamma,
-                       std::vector<double> &PMF_vec)
+bool eval_EBB_PMF_allN(const int & max_n,
+                       const int & y,                  // min_n = y
+                       const double & lambda,
+                       const double & gamma,
+                       std::vector<double> & PMF_vec)
 {
-    // If (d-k+1) <=1 then we don't need to do these calculations.
+    // If (d-k+1) <=1 then we don't need to do these calculations
+    // because we will be using straight binomial calculation for
+    // P(S(t)=a|m=0 or 1).
     if (max_n < 2) { return 0;}
     
     double prob_mass = 1.0;
-    double min_n;
-    if (y < 2)        // Here y=0/1 and max_n >= 2; can fill the 0/1 slots of PMF with nonsense.
+    
+    // We only need to fill PMF_vec from a (or 'y' as it's called here)
+    // to d-k+1.
+    // The EBB pmf has a product with a terms, a product with d-a terms, and a product
+    // with d terms.
+    // We don't need to fill PMF_vec[0] or PMF_vec[1] ever because P(S(t)=a|m=0/1) always
+    // uses straight binomial.
+    // We don't need to fill PMF_vec for any indices less than 'y' because m has to be
+    // greater than a.
+    
+    // The case of y=(d-k+1) has only two products, treat it differently
+    // The case of y=0 is special because then we only have two products; treat it differently.
+    if (y == max_n)
     {
-        PMF_vec[0] = 0.0;
-        PMF_vec[1] = 0.0;
-        
-        if (y == 0)
+        for (int jjj=0; jjj<max_n; ++jjj)
         {
-            prob_mass = (1-lambda) * (1-lambda+gamma) / (1+gamma);      // For a=0 and m=2:(d-k+1)
-        } else if (y == 1)
-        {
-            prob_mass = lambda * (1-lambda) / (1+gamma);                // For a=1 and m=2:(d-k+1)
+            prob_mass = prob_mass * (lambda+gamma*jjj) / (1+gamma*jjj);
         }
         
-        // Start the next phase at y=2.
-        min_n = 2;
-        PMF_vec[2] = prob_mass;
-    }
-    else
+        // Only need to fill the one entry of PMF_vec if a=(d-k+1)
+        PMF_vec[y] = prob_mass;
+        return 0;
+        
+    } else if (y == 0)          // Again only two products
     {
-        // Here we just do one calculation and finish.
-        for (int iii=0; iii<y; ++iii)
+        for (int jjj=0; jjj<max_n; ++jjj)
         {
-            prob_mass = prob_mass * (lambda+gamma*iii) / (1+gamma*iii);
+            prob_mass = prob_mass * (1 - lambda + gamma*jjj) / (1 + gamma*jjj);
+            PMF_vec[jjj+1] = prob_mass;
+        }
+        return 0;
+        
+    } else {                    // Normal three products
+        // Get two of the products here, the (v-1) and (part of) the (d-1).
+        // Don't need to fill PMF_vec for this part since m>=a always.
+        for (int jjj=0; jjj<y; ++jjj)
+        {
+            prob_mass = prob_mass * (lambda + gamma*jjj) / (1 + gamma*jjj);
         }
         PMF_vec[y] = prob_mass;
-        min_n = y;
-    }
-    
-    if (min_n == max_n)             // Done if a=(d-k+1).
-    {
-        return 0;
-    }
-    
-    // Not done, a<(d-k+1).
-    int n_diff = max_n - min_n;
-    for (int jjj=1; jjj<=n_diff; ++jjj)             // One multiplication and store for each j.
-    {
-        prob_mass = prob_mass * (1-lambda+gamma*(min_n-y-1+jjj)) / (1+gamma*(min_n-1+jjj));
-        PMF_vec[min_n+jjj] = prob_mass;
+        // Get the rest of (d-1) and also the (d-v-1) product
+        for (int jjj=y; jjj<max_n; ++jjj)
+        {
+            prob_mass = prob_mass * (1 - lambda + gamma*(jjj-y)) / (1 + gamma*jjj);
+            PMF_vec[jjj+1] = prob_mass;
+        }
     }
     
     return 0;
 }
+
 
 
 // Calculate q_k,a by summing over q_k,a|S(t)=m for m=a:(d-k)
@@ -368,7 +392,7 @@ double calc_qka(const int &d,
 
 
 // The p-value calculation 'master' function, the interface between the math and main fn.
-// Loop through all k, calculatin q_k,a from a=0:(t-k) until we get to q_d,0/
+// Loop through all k, calculating q_k,a from a=0:(t-k) until we get to q_d,0/
 // Return the p-value.
 double calc_allq(const int &d,
                  const std::vector <double> &t_vec,
