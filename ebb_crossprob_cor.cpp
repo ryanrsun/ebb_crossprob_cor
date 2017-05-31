@@ -291,7 +291,7 @@ bool eval_EBB_PMF_allN(const int & max_n,
     // P(S(t)=a|m=0 or 1).
     if (max_n < 2) { return 0;}
     
-    double prob_mass = 1.0;
+    double log_prob_mass = 0.0;
     
     // We only need to fill PMF_vec from a (or 'y' as it's called here)
     // to d-k+1.
@@ -308,19 +308,19 @@ bool eval_EBB_PMF_allN(const int & max_n,
     {
         for (int jjj=0; jjj<max_n; ++jjj)
         {
-            prob_mass = prob_mass * (lambda+gamma*jjj) / (1+gamma*jjj);
+            log_prob_mass += std::log(lambda+gamma*jjj) - std::log(1+gamma*jjj);
         }
         
         // Only need to fill the one entry of PMF_vec if a=(d-k+1)
-        PMF_vec[y] = prob_mass;
+        PMF_vec[y] = log_prob_mass;
         return 0;
         
     } else if (y == 0)          // Again only two products
     {
         for (int jjj=0; jjj<max_n; ++jjj)
         {
-            prob_mass = prob_mass * (1 - lambda + gamma*jjj) / (1 + gamma*jjj);
-            PMF_vec[jjj+1] = prob_mass;
+            log_prob_mass += std::log(1 - lambda + gamma*jjj) - std::log(1 + gamma*jjj);
+            PMF_vec[jjj+1] = log_prob_mass;
         }
         return 0;
         
@@ -329,20 +329,19 @@ bool eval_EBB_PMF_allN(const int & max_n,
         // Don't need to fill PMF_vec for this part since m>=a always.
         for (int jjj=0; jjj<y; ++jjj)
         {
-            prob_mass = prob_mass * (lambda + gamma*jjj) / (1 + gamma*jjj);
+            log_prob_mass += std::log(lambda + gamma*jjj) - std::log(1 + gamma*jjj);
         }
-        PMF_vec[y] = prob_mass;
+        PMF_vec[y] = log_prob_mass;
         // Get the rest of (d-1) and also the (d-v-1) product
         for (int jjj=y; jjj<max_n; ++jjj)
         {
-            prob_mass = prob_mass * (1 - lambda + gamma*(jjj-y)) / (1 + gamma*jjj);
-            PMF_vec[jjj+1] = prob_mass;
+            log_prob_mass += std::log(1 - lambda + gamma*(jjj-y)) - std::log(1 + gamma*jjj);
+            PMF_vec[jjj+1] = log_prob_mass;
         }
     }
     
     return 0;
 }
-
 
 
 // Calculate q_k,a by summing over q_k,a|S(t)=m for m=a:(d-k)
@@ -355,10 +354,10 @@ double calc_qka(const int &d,
                 const double &lambda,
                 const double &gamma)
 {
-    double q_ka = 0.0;
     double min_gamma;
-    double m_choose_a;
+    double log_m_choose_a;
     std::vector<double> PMF_vec(d+1);
+    std::vector<double> log_qka_calc_vec(d+k-1 - a + 1);
     
     // To hold the the EBB probability (w/o factorial part) for m=a:(d-k+1)
     if (!ind_flag)
@@ -371,24 +370,44 @@ double calc_qka(const int &d,
     }
     
     // Sum over all possible values of S(t)=m
+    double max_value = 0.0;
     for (int mmm=a; mmm<=(d-k+1); ++mmm)
     {
-        m_choose_a = std::exp( log_ftable[mmm] - log_ftable[a] - log_ftable[mmm-a] );
+        log_m_choose_a = log_ftable[mmm] - log_ftable[a] - log_ftable[mmm-a];
         
         // Use binomial if m=0/1 or if independence flag or if gamma outside parameter space.
         min_gamma = std::max(-lambda/(mmm-1), -(1-lambda)/(mmm-1));
         if (mmm<=1 || ind_flag || gamma<min_gamma)
         {
-            q_ka += prev_row[mmm] * m_choose_a * pow(lambda, a) * pow((1.0-lambda), (mmm-a));
+            log_qka_calc_vec[mmm-a] = prev_row[mmm] + log_m_choose_a + a*std::log(lambda) + (mmm-a)*std::log(1.0-lambda);
         }
         else          // EBB PMF
         {
-            q_ka += prev_row[mmm] * m_choose_a * PMF_vec[mmm];
+            log_qka_calc_vec[mmm-a] = prev_row[mmm] + log_m_choose_a + PMF_vec[mmm];
+        }
+        
+        // Check for max value
+        if (log_qka_calc_vec[mmm-a] > max_value) {
+            max_value = log_qka_calc_vec[mmm-a];
         }
     }
     
-    return q_ka;
+    // Different for k=1 because no way to represent log(0)
+    if (k == 1)
+    {
+        return log_qka_calc_vec[d-k+1-a];
+    }
+    
+    // LogSumExp procedure
+    double sum_term = 0.0;
+    for (int mmm=a; mmm<=(d-k+1); ++mmm)
+    {
+        sum_term += std::exp(log_qka_calc_vec[mmm-a] - max_value);
+    }
+    return max_value + std::log(sum_term);
 }
+
+
 
 
 // The p-value calculation 'master' function, the interface between the math and main fn.
@@ -442,7 +461,7 @@ double calc_allq(const int &d,
     
     // Initial conditions.
     double prev_bound = 0.0;
-    current_row[d] = 1.0;
+    current_row[d] = 0.0;
     
     // Loop through k=1,...,d.
     double lambda = 1.0;
@@ -457,7 +476,7 @@ double calc_allq(const int &d,
         // If new bound same as previous bound (make sure tolerance is same as match_moments).
         if (fabs(t_vec[kkk-1] - prev_bound) < pow(10.0, -8.0))
         {
-            current_row[d-kkk+1] = 0.0;
+            current_row[d-kkk+1] = 0.0;             // We don't actually need to zero it out since we never get here.
             prev_bound = t_vec[kkk-1];
             continue;
         }
@@ -490,8 +509,9 @@ double calc_allq(const int &d,
         prev_bound = t_vec[kkk-1];
     }
     
-    return (1-current_row[0]);
+    return (1-std::exp(current_row[0]));
 }
+
 
 ////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////
